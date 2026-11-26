@@ -72,7 +72,16 @@ class PresenceController {
 
     @PostMapping(value = "/api/presences/preview.csv", produces = "text/csv;charset=UTF-8")
     public ResponseEntity<String> exportPreview(@RequestBody PreviewRequest request) {
-        String csv = preview(request).stream()
+        return csvResponse(preview(request));
+    }
+
+    @PostMapping(value = "/api/presences/preview/official.csv", produces = "text/csv;charset=UTF-8")
+    public ResponseEntity<String> exportOfficialPreview(@RequestBody RosterPreviewRequest request) {
+        return csvResponse(previewOfficialRoster(request));
+    }
+
+    private static ResponseEntity<String> csvResponse(List<PresenceService.Row> rows) {
+        String csv = rows.stream()
                 .map(row -> csvStudentId(row.studentId()) + "," + row.status() + "\r\n")
                 .collect(Collectors.joining("", "studentId,status\r\n", ""));
         return ResponseEntity.ok()
@@ -83,7 +92,8 @@ class PresenceController {
     private static String csvStudentId(String id) {
         String trimmed = id.stripLeading();
         // Prevent spreadsheets from interpreting an identifier as a formula.
-        if ("=+-@＝＋－＠".indexOf(trimmed.charAt(0)) >= 0 || "\t\r\n".indexOf(id.charAt(0)) >= 0) {
+        boolean startsWithFormula = !trimmed.isEmpty() && "=+-@＝＋－＠".indexOf(trimmed.charAt(0)) >= 0;
+        if (startsWithFormula || (!id.isEmpty() && "\t\r\n".indexOf(id.charAt(0)) >= 0)) {
             id = "'" + id;
         }
         return "\"" + id.replace("\"", "\"\"") + "\"";

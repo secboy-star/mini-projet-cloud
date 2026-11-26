@@ -1,9 +1,12 @@
 package ma.ensa.presence;
 
+import java.sql.DriverManager;
+import java.sql.SQLException;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
@@ -30,6 +33,12 @@ public class PresenceApplication {
 @RestController
 class PresenceController {
     private final PresenceService service;
+    @Value("${presence.postgres.url:}")
+    private String postgresUrl;
+    @Value("${presence.postgres.user:}")
+    private String postgresUser;
+    @Value("${presence.postgres.password:}")
+    private String postgresPassword;
 
     public PresenceController(PresenceService service) {
         this.service = service;
@@ -43,6 +52,22 @@ class PresenceController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Valid student identifiers required");
         }
         return service.calculate(request.officialStudentIds(), request.recognizedStudentIds());
+    }
+
+    @PostMapping("/api/presences/preview/official")
+    public List<PresenceService.Row> previewOfficialRoster(@RequestBody RosterPreviewRequest request) {
+        if (invalidId(request.moduleCode()) || request.version() < 1
+                || request.recognizedStudentIds() == null
+                || request.recognizedStudentIds().stream().anyMatch(PresenceController::invalidId)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Valid roster and recognized IDs required");
+        }
+        try (var connection = DriverManager.getConnection(postgresUrl, postgresUser, postgresPassword)) {
+            var roster = new OfficialRosterRepository().findStudentIds(connection, request.moduleCode(), request.version())
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Official roster not found"));
+            return service.calculate(roster, request.recognizedStudentIds());
+        } catch (SQLException exception) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Official roster unavailable");
+        }
     }
 
     @PostMapping(value = "/api/presences/preview.csv", produces = "text/csv;charset=UTF-8")
@@ -69,4 +94,5 @@ class PresenceController {
     }
 
     public record PreviewRequest(List<String> officialStudentIds, Set<String> recognizedStudentIds) {}
+    public record RosterPreviewRequest(String moduleCode, int version, Set<String> recognizedStudentIds) {}
 }

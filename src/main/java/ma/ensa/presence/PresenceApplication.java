@@ -2,11 +2,14 @@ package ma.ensa.presence;
 
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
@@ -40,6 +43,25 @@ class PresenceController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Valid student identifiers required");
         }
         return service.calculate(request.officialStudentIds(), request.recognizedStudentIds());
+    }
+
+    @PostMapping(value = "/api/presences/preview.csv", produces = "text/csv;charset=UTF-8")
+    public ResponseEntity<String> exportPreview(@RequestBody PreviewRequest request) {
+        String csv = preview(request).stream()
+                .map(row -> csvStudentId(row.studentId()) + "," + row.status() + "\r\n")
+                .collect(Collectors.joining("", "studentId,status\r\n", ""));
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=presences.csv")
+                .body(csv);
+    }
+
+    private static String csvStudentId(String id) {
+        String trimmed = id.stripLeading();
+        // Prevent spreadsheets from interpreting an identifier as a formula.
+        if ("=+-@＝＋－＠".indexOf(trimmed.charAt(0)) >= 0 || "\t\r\n".indexOf(id.charAt(0)) >= 0) {
+            id = "'" + id;
+        }
+        return "\"" + id.replace("\"", "\"\"") + "\"";
     }
 
     private static boolean invalidId(String id) {

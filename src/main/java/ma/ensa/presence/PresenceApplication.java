@@ -56,7 +56,8 @@ class PresenceController {
     }
 
     @PostMapping(value = "/api/photos", consumes = "multipart/form-data", produces = "text/plain")
-    public ResponseEntity<String> uploadPhoto(@RequestParam("file") MultipartFile file) {
+    public ResponseEntity<String> uploadPhoto(@RequestParam("file") MultipartFile file,
+            @RequestParam(value = "sessionId", required = false) UUID sessionId) {
         if (swiftContainer == null || swiftContainer.isBlank() || swiftToken == null || swiftToken.isBlank()) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Photo storage unavailable");
         }
@@ -65,21 +66,25 @@ class PresenceController {
             if (photo.length < 8 || !HexFormat.of().formatHex(photo, 0, 8).equals("89504e470d0a1a0a")) {
                 throw new ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "PNG photo required");
             }
-            return ResponseEntity.status(HttpStatus.CREATED).body(savePhoto(photo));
+            return ResponseEntity.status(HttpStatus.CREATED).body(savePhoto(photo, sessionId));
         } catch (IOException | InterruptedException | IllegalArgumentException | SQLException failure) {
             if (failure instanceof InterruptedException) Thread.currentThread().interrupt();
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Photo storage unavailable");
         }
     }
 
-    private String savePhoto(byte[] photo) throws SQLException, IOException, InterruptedException {
+    private String savePhoto(byte[] photo, UUID sessionId) throws SQLException, IOException, InterruptedException {
         URI container = URI.create(swiftContainer);
         try (var connection = DriverManager.getConnection(postgresUrl, postgresUser, postgresPassword)) {
             connection.setAutoCommit(false);
+            var metadata = new PhotoMetadataRepository();
+            if (sessionId != null && !metadata.lockSession(connection, sessionId)) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Attendance session not found");
+            }
             String key = photoStore.upload(container, swiftToken, "image/png", photo);
             UUID objectKey = UUID.fromString(key);
             try {
-                new PhotoMetadataRepository().insert(connection, objectKey, "image/png", photo.length);
+                metadata.insert(connection, objectKey, "image/png", photo.length, sessionId);
             } catch (SQLException insertFailure) {
                 try {
                     photoStore.delete(container, swiftToken, objectKey);

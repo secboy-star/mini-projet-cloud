@@ -1,7 +1,10 @@
 package ma.ensa.presence;
 
+import java.io.IOException;
+import java.net.URI;
 import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -15,7 +18,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
 @SpringBootApplication
@@ -33,6 +38,11 @@ public class PresenceApplication {
 @RestController
 class PresenceController {
     private final PresenceService service;
+    private final SwiftPhotoStore photoStore = new SwiftPhotoStore();
+    @Value("${presence.swift.container-url:}")
+    private String swiftContainer;
+    @Value("${presence.swift.token:}")
+    private String swiftToken;
     @Value("${presence.postgres.url:}")
     private String postgresUrl;
     @Value("${presence.postgres.user:}")
@@ -42,6 +52,24 @@ class PresenceController {
 
     public PresenceController(PresenceService service) {
         this.service = service;
+    }
+
+    @PostMapping(value = "/api/photos", consumes = "multipart/form-data", produces = "text/plain")
+    public ResponseEntity<String> uploadPhoto(@RequestParam("file") MultipartFile file) {
+        if (swiftContainer == null || swiftContainer.isBlank() || swiftToken == null || swiftToken.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Photo storage unavailable");
+        }
+        try {
+            byte[] photo = file.getBytes();
+            if (photo.length < 8 || !HexFormat.of().formatHex(photo, 0, 8).equals("89504e470d0a1a0a")) {
+                throw new ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "PNG photo required");
+            }
+            String key = photoStore.upload(URI.create(swiftContainer), swiftToken, "image/png", photo);
+            return ResponseEntity.status(HttpStatus.CREATED).body(key);
+        } catch (IOException | InterruptedException | IllegalArgumentException failure) {
+            if (failure instanceof InterruptedException) Thread.currentThread().interrupt();
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Photo storage unavailable");
+        }
     }
 
     @PostMapping("/api/presences/preview")

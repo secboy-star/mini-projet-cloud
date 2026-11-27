@@ -23,6 +23,16 @@ final class SwiftPhotoStore {
         return objectKey.toString();
     }
 
+    byte[] download(URI container, String token, UUID objectKey) throws IOException, InterruptedException {
+        if (objectKey == null) throw new IllegalArgumentException("A Swift object key is required");
+        var request = objectRequest(container, token, objectKey).GET().build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofByteArray());
+        if (response.statusCode() != 200) {
+            throw new IOException("Swift refused the object read (HTTP " + response.statusCode() + ")");
+        }
+        return response.body();
+    }
+
     void delete(URI container, String token, UUID objectKey) throws IOException, InterruptedException {
         if (objectKey == null) throw new IllegalArgumentException("A Swift object key is required");
         var request = objectRequest(container, token, objectKey).DELETE().build();

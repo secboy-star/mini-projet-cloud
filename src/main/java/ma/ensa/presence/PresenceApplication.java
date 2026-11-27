@@ -7,6 +7,7 @@ import java.sql.SQLException;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 import org.springframework.beans.factory.annotation.Value;
@@ -64,11 +65,34 @@ class PresenceController {
             if (photo.length < 8 || !HexFormat.of().formatHex(photo, 0, 8).equals("89504e470d0a1a0a")) {
                 throw new ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "PNG photo required");
             }
-            String key = photoStore.upload(URI.create(swiftContainer), swiftToken, "image/png", photo);
-            return ResponseEntity.status(HttpStatus.CREATED).body(key);
-        } catch (IOException | InterruptedException | IllegalArgumentException failure) {
+            return ResponseEntity.status(HttpStatus.CREATED).body(savePhoto(photo));
+        } catch (IOException | InterruptedException | IllegalArgumentException | SQLException failure) {
             if (failure instanceof InterruptedException) Thread.currentThread().interrupt();
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Photo storage unavailable");
+        }
+    }
+
+    private String savePhoto(byte[] photo) throws SQLException, IOException, InterruptedException {
+        URI container = URI.create(swiftContainer);
+        try (var connection = DriverManager.getConnection(postgresUrl, postgresUser, postgresPassword)) {
+            connection.setAutoCommit(false);
+            String key = photoStore.upload(container, swiftToken, "image/png", photo);
+            UUID objectKey = UUID.fromString(key);
+            try {
+                new PhotoMetadataRepository().insert(connection, objectKey, "image/png", photo.length);
+            } catch (SQLException insertFailure) {
+                try {
+                    photoStore.delete(container, swiftToken, objectKey);
+                } catch (IOException | InterruptedException cleanupFailure) {
+                    if (cleanupFailure instanceof InterruptedException) Thread.currentThread().interrupt();
+                    System.getLogger(PresenceController.class.getName()).log(System.Logger.Level.WARNING,
+                            "Swift cleanup failed for object {0}", key);
+                }
+                throw insertFailure;
+            }
+            // Keep the object if the database commit outcome is uncertain.
+            connection.commit();
+            return key;
         }
     }
 

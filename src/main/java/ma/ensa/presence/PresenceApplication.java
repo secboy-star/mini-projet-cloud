@@ -52,6 +52,8 @@ class PresenceController {
     private String postgresUser;
     @Value("${presence.postgres.password:}")
     private String postgresPassword;
+    @Value("${presence.demo.finalization-enabled:false}")
+    private boolean demoFinalizationEnabled;
 
     public PresenceController(PresenceService service) {
         this.service = service;
@@ -154,6 +156,31 @@ class PresenceController {
             return service.calculate(roster, recognized);
         } catch (SQLException failure) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Recognition results unavailable");
+        }
+    }
+
+    @PostMapping("/api/presences/finalize")
+    public ResponseEntity<Void> finalizePresence(@RequestParam("eventId") UUID eventId,
+            @RequestParam("minimumScore") double minimumScore) {
+        if (!demoFinalizationEnabled) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+        if (!(minimumScore >= 0 && minimumScore <= 1)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Score threshold must be between zero and one");
+        }
+        try (var connection = DriverManager.getConnection(postgresUrl, postgresUser, postgresPassword);
+             var query = connection.prepareStatement("SELECT finalize_attendance(?, ?)")) {
+            query.setObject(1, eventId);
+            query.setDouble(2, minimumScore);
+            try (var rows = query.executeQuery()) {
+                if (!rows.next()) throw new SQLException("Missing finalization status");
+                return switch (rows.getString(1)) {
+                    case "created" -> ResponseEntity.status(HttpStatus.CREATED).build();
+                    case "already_finalized" -> ResponseEntity.status(HttpStatus.CONFLICT).build();
+                    case "result_not_found" -> ResponseEntity.notFound().build();
+                    default -> throw new SQLException("Unexpected finalization status");
+                };
+            }
+        } catch (SQLException failure) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Attendance finalization unavailable");
         }
     }
 

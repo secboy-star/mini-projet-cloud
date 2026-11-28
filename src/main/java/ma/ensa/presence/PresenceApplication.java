@@ -4,6 +4,8 @@ import java.io.IOException;
 import java.net.URI;
 import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
@@ -124,6 +126,34 @@ class PresenceController {
             return service.calculate(roster, request.recognizedStudentIds());
         } catch (SQLException exception) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Official roster unavailable");
+        }
+    }
+
+    @PostMapping("/api/presences/preview/recognition")
+    public List<PresenceService.Row> previewRecognition(@RequestParam("eventId") UUID eventId,
+            @RequestParam("minimumScore") double minimumScore) {
+        if (!(minimumScore >= 0 && minimumScore <= 1)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Score threshold must be between zero and one");
+        }
+        var roster = new ArrayList<String>();
+        var recognized = new HashSet<String>();
+        String sql = "SELECT student_id, best_score FROM recognition_result "
+                + "LEFT JOIN recognition_roster_score USING (event_id) WHERE event_id = ? ORDER BY list_position";
+        try (var connection = DriverManager.getConnection(postgresUrl, postgresUser, postgresPassword);
+             var query = connection.prepareStatement(sql)) {
+            query.setObject(1, eventId);
+            try (var rows = query.executeQuery()) {
+                if (!rows.next()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Recognition result not found");
+                do {
+                    String id = rows.getString("student_id");
+                    Double score = rows.getObject("best_score", Double.class);
+                    if (id != null) roster.add(id);
+                    if (score != null && score >= minimumScore) recognized.add(id);
+                } while (rows.next());
+            }
+            return service.calculate(roster, recognized);
+        } catch (SQLException failure) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Recognition results unavailable");
         }
     }
 

@@ -16,9 +16,11 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -192,6 +194,29 @@ class PresenceController {
     @PostMapping(value = "/api/presences/preview/official.csv", produces = "text/csv;charset=UTF-8")
     public ResponseEntity<String> exportOfficialPreview(@RequestBody RosterPreviewRequest request) {
         return csvResponse(previewOfficialRoster(request));
+    }
+
+    @GetMapping(value = "/api/presences/finalized.csv", produces = "text/csv;charset=UTF-8")
+    public ResponseEntity<String> exportFinalized(@RequestParam("sessionId") UUID sessionId) {
+        if (!demoFinalizationEnabled) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+        var entries = new ArrayList<PresenceService.Row>();
+        String sql = "SELECT student_id, status FROM attendance_finalization "
+                + "LEFT JOIN attendance_finalized_entry USING (session_id) WHERE session_id = ? ORDER BY list_position";
+        try (var connection = DriverManager.getConnection(postgresUrl, postgresUser, postgresPassword);
+             var query = connection.prepareStatement(sql)) {
+            query.setObject(1, sessionId);
+            try (var rows = query.executeQuery()) {
+                if (!rows.next()) return ResponseEntity.notFound().build();
+                do {
+                    String id = rows.getString("student_id");
+                    if (id != null) entries.add(new PresenceService.Row(id, PresenceService.Status.valueOf(rows.getString("status"))));
+                } while (rows.next());
+            }
+            var csv = csvResponse(entries);
+            return ResponseEntity.ok().headers(csv.getHeaders()).cacheControl(CacheControl.noStore()).body(csv.getBody());
+        } catch (SQLException failure) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Finalized attendance unavailable");
+        }
     }
 
     private static ResponseEntity<String> csvResponse(List<PresenceService.Row> rows) {
